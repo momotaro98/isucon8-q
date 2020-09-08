@@ -1,0 +1,17 @@
+[Unit]
+Description = isucon8 qualifier main application in golang
+
+[Service]
+WorkingDirectory=/home/isucon/torb/webapp/go/
+EnvironmentFile=/home/isucon/torb/webapp/env.sh
+# EnvironmentFile=/home/isucon/secret.env.sh
+
+ExecStart = /home/isucon/torb/webapp/go/torb
+
+Restart   = always
+Type      = simple
+User      = isucon
+Group     = isucon
+
+[Install]
+WantedBy = multi-user.target
