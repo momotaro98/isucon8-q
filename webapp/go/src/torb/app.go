@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo"
@@ -225,6 +227,41 @@ func getEvents(all bool) ([]*Event, error) {
 	return events, nil
 }
 
+func getReservationsIn(q sqlx.Queryer, eventID int64, sheets []*Sheet) (reservation map[int64]SmallReservation, err error) { // key is SheetID
+	sheetIDs := make([]int64, 0, len(sheets))
+	for _, s := range sheets {
+		sheetIDs = append(sheetIDs, s.ID)
+	}
+
+	reservation = make(map[int64]SmallReservation)
+	inQuery, inArgs, err := sqlx.In(`
+SELECT user_id, reserved_at FROM reservations WHERE event_id = ? AND sheet_id in (?) AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+`, eventID, sheetIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Queryx(inQuery, inArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dst SmallReservation
+		err = rows.StructScan(&dst)
+		if err != nil {
+			return nil, err
+		}
+		reservation[dst.SheetID] = dst
+	}
+	return reservation, nil
+}
+
+type SmallReservation struct {
+	SheetID    int64      `db:"sheet_id"`
+	UserID     int64      `db:"user_id"`
+	ReservedAt *time.Time `db:"reserved_at"`
+}
+
 func getEvent(eventID, loginUserID int64) (*Event, error) {
 	var event Event
 	if err := db.QueryRow("SELECT * FROM events WHERE id = ?", eventID).Scan(&event.ID, &event.Title, &event.PublicFg, &event.ClosedFg, &event.Price); err != nil {
@@ -243,29 +280,55 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 	}
 	defer rows.Close()
 
+	var sheets = make([]*Sheet, 0, 1000)
 	for rows.Next() {
 		var sheet Sheet
 		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
 			return nil, err
 		}
+		sheets = append(sheets, &sheet)
+	}
+
+	sheetIDResvMap, err := getReservationsIn(db, event.ID, sheets)
+	if err != nil {
+		log.Println("error in getReservationsIn:", err)
+		return nil, err
+	}
+
+	//for rows.Next() {
+	for _, sheet := range sheets {
+		//var sheet Sheet
+		//if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
+		//	return nil, err
+		//}
 		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
 
-		var reservation Reservation
-		err := db.QueryRow("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", event.ID, sheet.ID).Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt)
-		if err == nil {
+		//var reservation Reservation
+		// was 1+N //err := db.QueryRow("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", event.ID, sheet.ID).Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt)
+		reservation, ok := sheetIDResvMap[sheet.ID]
+		if ok {
 			sheet.Mine = reservation.UserID == loginUserID
 			sheet.Reserved = true
 			sheet.ReservedAtUnix = reservation.ReservedAt.Unix()
-		} else if err == sql.ErrNoRows {
+		} else {
 			event.Remains++
 			event.Sheets[sheet.Rank].Remains++
-		} else {
-			return nil, err
 		}
+		//if err == nil {
+		//	sheet.Mine = reservation.UserID == loginUserID
+		//	sheet.Reserved = true
+		//	sheet.ReservedAtUnix = reservation.ReservedAt.Unix()
+		//} else if err == sql.ErrNoRows {
+		//	event.Remains++
+		//	event.Sheets[sheet.Rank].Remains++
+		//} else {
+		//	return nil, err
+		//}
 
-		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
+		//event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
+		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, sheet)
 	}
 
 	return &event, nil
@@ -311,7 +374,8 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 	return r.templates.ExecuteTemplate(w, name, data)
 }
 
-var db *sql.DB
+//var db *sql.DB
+var db *sqlx.DB
 
 func main() {
 	runtime.SetBlockProfileRate(1)
@@ -327,7 +391,8 @@ func main() {
 	)
 
 	var err error
-	db, err = sql.Open("mysql", dsn)
+	//db, err = sql.Open("mysql", dsn)
+	db, err = sqlx.Open("mysql", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}

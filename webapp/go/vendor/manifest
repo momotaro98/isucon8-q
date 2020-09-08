@@ -32,6 +32,12 @@
 			"branch": "master"
 		},
 		{
+			"importpath": "github.com/jmoiron/sqlx",
+			"repository": "https://github.com/jmoiron/sqlx",
+			"revision": "0794cb1f47ee444eda9624f952ab8a370bec22de",
+			"branch": "master"
+		},
+		{
 			"importpath": "github.com/labstack/echo",
 			"repository": "https://github.com/labstack/echo",
 			"revision": "74f9806b34424e53aa1ad066d5219d7eab3a3b6c",
