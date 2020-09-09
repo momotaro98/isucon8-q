@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/go-redis/redis"
+
 	"bytes"
 	"database/sql"
 	"encoding/json"
@@ -20,9 +22,9 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
-	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/middleware"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -398,6 +400,81 @@ var (
 	sheetMap  = make(map[int64]SimpleSheet)   // in-memoery sheet
 )
 
+var (
+	redisClient *redis.Client
+)
+
+const (
+	ReservationIDField = "reservation_id"
+	EventIDField       = "event_id"
+	SheetIDField       = "sheet_id"
+	UserIDField        = "user_id"
+	ReservedAt         = "reserved_at"
+)
+
+func ResevHSET(sr ReservedReservation) error {
+	key := fmt.Sprintf("%d:%d", sr.EventID, sr.SheetID)
+	_ = redisClient.HSet(
+		key,                // key
+		ReservationIDField, // field
+		sr.ReservationID,   // val
+	).Err()
+	_ = redisClient.HSet(
+		key,          // key
+		EventIDField, // field
+		sr.EventID,   // val
+	).Err()
+	_ = redisClient.HSet(
+		key,          // key
+		SheetIDField, // field
+		sr.SheetID,   // val
+	).Err()
+	_ = redisClient.HSet(
+		key,         // key
+		UserIDField, // field
+		sr.UserID,   // val
+	).Err()
+	_ = redisClient.HSet(
+		key,           // key
+		ReservedAt,    // field
+		sr.ReservedAt, // val
+	).Err()
+	return nil
+}
+
+type ReservedReservation struct {
+	ReservationID int64 `db:"id"`
+	EventID       int64 `db:"event_id"`
+	SheetID       int64 `db:"sheet_id"`
+	UserID        int64 `db:"user_id"`
+	ReservedAt    int64 `db:"reserved_at"`
+}
+
+func flushAndLoadRedis() error {
+	redisClient.FlushAll()
+
+	dest := []ReservedReservation{}
+	err := db.Select(&dest, `
+SELECT * FROM reservations WHERE canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+`)
+	if err != nil {
+		return err
+	}
+	for _, d := range dest {
+		if err := ResevHSET(d); err != nil {
+			return err
+		}
+	}
+
+	hgetallVal, err := redisClient.HGetAll("10:2").Result()
+	if err != nil {
+		fmt.Println("redis.Client.HGetAll Error:", err)
+	}
+	fmt.Println(hgetallVal)
+
+	return nil
+}
+
 func main() {
 	runtime.SetBlockProfileRate(1)
 	runtime.SetMutexProfileFraction(1)
@@ -417,6 +494,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
 
 	e := echo.New()
 	funcs := template.FuncMap{
@@ -474,6 +557,12 @@ func main() {
 			sheetList = append(sheetList, &ss)
 			sheetMap[sheet.ID] = ss
 		}
+
+		fmt.Println("before flush and load redis")
+		if err := flushAndLoadRedis(); err != nil {
+			log.Fatalln(err)
+		}
+		fmt.Println("after flush and load redis")
 
 		return c.NoContent(204)
 	})
