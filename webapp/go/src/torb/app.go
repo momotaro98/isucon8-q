@@ -227,20 +227,18 @@ func getEvents(all bool) ([]*Event, error) {
 	return events, nil
 }
 
-func getReservationsIn(q sqlx.Queryer, eventID int64, sheets []*Sheet) (reservation map[int64]SmallReservation, err error) { // key is SheetID
-	sheetIDs := make([]int64, 0, len(sheets))
-	for _, s := range sheets {
-		sheetIDs = append(sheetIDs, s.ID)
-	}
-
+func getReservationsIn(q sqlx.Queryer, eventID int64) (reservation map[int64]SmallReservation, err error) { // key is SheetID
 	reservation = make(map[int64]SmallReservation)
-	inQuery, inArgs, err := sqlx.In(`
-SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND sheet_id in (?) AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
-`, eventID, sheetIDs)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := q.Queryx(inQuery, inArgs...)
+	//	inQuery, inArgs, err := sqlx.In(`
+	//SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+	//`, eventID)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	rows, err := q.Queryx(inQuery, inArgs...)
+	rows, err := q.Queryx(`
+SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+`, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +287,7 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		sheets = append(sheets, &sheet)
 	}
 
-	sheetIDResvMap, err := getReservationsIn(db, event.ID, sheets)
+	sheetIDResvMap, err := getReservationsIn(db, event.ID)
 	if err != nil {
 		log.Println("error in getReservationsIn:", err)
 		return nil, err
