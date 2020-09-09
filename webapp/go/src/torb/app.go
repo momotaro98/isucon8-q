@@ -67,6 +67,13 @@ type Sheet struct {
 	ReservedAtUnix int64      `json:"reserved_at,omitempty"`
 }
 
+type SimpleSheet struct {
+	ID    int64  `json:"-"`
+	Rank  string `json:"-"`
+	Num   int64  `json:"num"`
+	Price int64  `json:"-"`
+}
+
 type Reservation struct {
 	ID         int64      `json:"id"`
 	EventID    int64      `json:"-"`
@@ -272,20 +279,31 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		"C": &Sheets{},
 	}
 
-	rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	//rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
+	//if err != nil {
+	//	return nil, err
+	//}
+	//defer rows.Close()
 
 	var sheets = make([]*Sheet, 0, 1000)
-	for rows.Next() {
-		var sheet Sheet
-		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-			return nil, err
+
+	for _, s := range sheetList {
+		var sheet = Sheet{
+			ID:    s.ID,
+			Rank:  s.Rank,
+			Num:   s.Num,
+			Price: s.Price,
 		}
 		sheets = append(sheets, &sheet)
 	}
+
+	//for rows.Next() {
+	//	var sheet Sheet
+	//	if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
+	//		return nil, err
+	//	}
+	//	sheets = append(sheets, &sheet)
+	//}
 
 	sheetIDResvMap, err := getReservationsIn(db, event.ID)
 	if err != nil {
@@ -375,6 +393,11 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 //var db *sql.DB
 var db *sqlx.DB
 
+var (
+	sheetList = make([]*SimpleSheet, 0, 1000) // in-memoery sheet
+	sheetMap  = make(map[int64]SimpleSheet)   // in-memoery sheet
+)
+
 func main() {
 	runtime.SetBlockProfileRate(1)
 	runtime.SetMutexProfileFraction(1)
@@ -429,6 +452,27 @@ func main() {
 		err := cmd.Run()
 		if err != nil {
 			return nil
+		}
+
+		// Load sheets in in-memory
+		rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sheet Sheet
+			if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
+				return err
+			}
+			ss := SimpleSheet{
+				ID:    sheet.ID,
+				Rank:  sheet.Rank,
+				Num:   sheet.Num,
+				Price: sheet.Price,
+			}
+			sheetList = append(sheetList, &ss)
+			sheetMap[sheet.ID] = ss
 		}
 
 		return c.NoContent(204)
