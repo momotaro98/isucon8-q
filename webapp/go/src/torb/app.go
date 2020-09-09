@@ -235,7 +235,7 @@ func getReservationsIn(q sqlx.Queryer, eventID int64, sheets []*Sheet) (reservat
 
 	reservation = make(map[int64]SmallReservation)
 	inQuery, inArgs, err := sqlx.In(`
-SELECT user_id, reserved_at FROM reservations WHERE event_id = ? AND sheet_id in (?) AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND sheet_id in (?) AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
 `, eventID, sheetIDs)
 	if err != nil {
 		return nil, err
