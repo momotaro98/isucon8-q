@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os/exec"
+
 	"github.com/go-redis/redis"
+	"github.com/newrelic/go-agent/v3/newrelic"
 
 	"bytes"
 	"database/sql"
@@ -488,6 +491,12 @@ SELECT id, event_id, sheet_id, user_id, reserved_at FROM reservations WHERE even
 	}
 	fmt.Println(hgetallVal)
 
+	inc, err := redisClient.Incr("xx_table_incr").Result()
+	if err != nil {
+		fmt.Println("redis Incr error:", err)
+	}
+	fmt.Println("inc:", inc)
+
 	return nil
 }
 
@@ -530,11 +539,15 @@ func main() {
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("secret"))))
 	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{Output: os.Stderr}))
 	e.Static("/", "public")
+	e.Use(nrt("newrelic"))
 	e.GET("/", func(c echo.Context) error {
+		txn := newrelic.FromContext(c.Request().Context())
+		segGetEventSeg := txn.StartSegment("getEnvets in /")
 		events, err := getEvents(false)
 		if err != nil {
 			return err
 		}
+		segGetEventSeg.End()
 		for i, v := range events {
 			events[i] = sanitizeEvent(v)
 		}
@@ -545,13 +558,17 @@ func main() {
 		})
 	}, fillinUser)
 	e.GET("/initialize", func(c echo.Context) error {
-		//cmd := exec.Command("../../db/init.sh")
-		//cmd.Stdin = os.Stdin
-		//cmd.Stdout = os.Stdout
-		//err := cmd.Run()
-		//if err != nil {
-		//	return nil
-		//}
+		if isLocal := os.Getenv("IS_LOCAL"); isLocal != "" {
+			// need in local initialize
+		} else {
+			cmd := exec.Command("../../db/init.sh")
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			err := cmd.Run()
+			if err != nil {
+				return nil
+			}
+		}
 
 		// Load sheets in in-memory
 		rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
