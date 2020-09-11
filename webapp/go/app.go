@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,9 +244,35 @@ func getReservationsIn(q sqlx.Queryer, eventID int64) (reservation map[int64]Sma
 	//		return nil, err
 	//	}
 	//	rows, err := q.Queryx(inQuery, inArgs...)
+
+	// Redis 使ってみたが Parseする部分がクソ重いっっぽい
+	//for _, sheet := range sheetList {
+	//	sheetID := sheet.ID
+	//	hgetallVal, err := redisClient.HGetAll(fmt.Sprintf("%d:%d", eventID, sheetID)).Result()
+	//	if err != nil {
+	//		fmt.Println("redis.Client.HGetAll Error in getReservationsIn:", err)
+	//	}
+	//	if len(hgetallVal) == 0 {
+	//		continue
+	//	}
+	//	userID, err := strconv.ParseInt(hgetallVal[UserIDField], 10, 64)
+	//	if err != nil {
+	//		fmt.Println("ParseInt err in userID in getReservationsIn", err)
+	//	}
+	//	reservedAt, err := time.Parse(time.RFC3339, hgetallVal[ReservedAt])
+	//	if err != nil {
+	//		fmt.Println("time.Parse err in reservedAt in getReservationsIn", err)
+	//	}
+	//	reservation[sheetID] = SmallReservation{
+	//		SheetID:    sheetID,
+	//		UserID:     userID,
+	//		ReservedAt: &reservedAt,
+	//	}
+	//}
+
 	rows, err := q.Queryx(`
-SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
-`, eventID)
+	SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+	`, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +285,7 @@ SELECT sheet_id, user_id, reserved_at FROM reservations WHERE event_id = ? AND c
 		}
 		reservation[dst.SheetID] = dst
 	}
+
 	return reservation, nil
 }
 
@@ -414,48 +440,37 @@ const (
 
 func ResevHSET(sr ReservedReservation) error {
 	key := fmt.Sprintf("%d:%d", sr.EventID, sr.SheetID)
-	_ = redisClient.HSet(
-		key,                // key
-		ReservationIDField, // field
-		sr.ReservationID,   // val
+	err := redisClient.HMSet(
+		key,
+		map[string]interface{}{
+			ReservationIDField: strconv.FormatInt(sr.ReservationID, 10),
+			EventIDField:       strconv.FormatInt(sr.EventID, 10),  // val
+			SheetIDField:       strconv.FormatInt(sr.SheetID, 10),  // val
+			UserIDField:        strconv.FormatInt(sr.UserID, 10),   // val
+			ReservedAt:         sr.ReservedAt.Format(time.RFC3339), // val
+		},
 	).Err()
-	_ = redisClient.HSet(
-		key,          // key
-		EventIDField, // field
-		sr.EventID,   // val
-	).Err()
-	_ = redisClient.HSet(
-		key,          // key
-		SheetIDField, // field
-		sr.SheetID,   // val
-	).Err()
-	_ = redisClient.HSet(
-		key,         // key
-		UserIDField, // field
-		sr.UserID,   // val
-	).Err()
-	_ = redisClient.HSet(
-		key,           // key
-		ReservedAt,    // field
-		sr.ReservedAt, // val
-	).Err()
+	if err != nil {
+		fmt.Println("ResevHSET error!", err)
+	}
 	return nil
 }
 
 type ReservedReservation struct {
-	ReservationID int64 `db:"id"`
-	EventID       int64 `db:"event_id"`
-	SheetID       int64 `db:"sheet_id"`
-	UserID        int64 `db:"user_id"`
-	ReservedAt    int64 `db:"reserved_at"`
+	ReservationID int64      `db:"id"`
+	EventID       int64      `db:"event_id"`
+	SheetID       int64      `db:"sheet_id"`
+	UserID        int64      `db:"user_id"`
+	ReservedAt    *time.Time `db:"reserved_at"`
 }
 
 func flushAndLoadRedis() error {
 	redisClient.FlushAll()
+	fmt.Println("after flush")
 
 	dest := []ReservedReservation{}
 	err := db.Select(&dest, `
-SELECT * FROM reservations WHERE canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+SELECT id, event_id, sheet_id, user_id, reserved_at FROM reservations WHERE event_id in (10, 11, 19, 20, 21, 22) AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
 `)
 	if err != nil {
 		return err
@@ -465,6 +480,7 @@ SELECT * FROM reservations WHERE canceled_at IS NULL GROUP BY event_id, sheet_id
 			return err
 		}
 	}
+	fmt.Println("after ResevHSET")
 
 	hgetallVal, err := redisClient.HGetAll("10:2").Result()
 	if err != nil {
@@ -529,13 +545,13 @@ func main() {
 		})
 	}, fillinUser)
 	e.GET("/initialize", func(c echo.Context) error {
-		cmd := exec.Command("../../db/init.sh")
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		err := cmd.Run()
-		if err != nil {
-			return nil
-		}
+		//cmd := exec.Command("../../db/init.sh")
+		//cmd.Stdin = os.Stdin
+		//cmd.Stdout = os.Stdout
+		//err := cmd.Run()
+		//if err != nil {
+		//	return nil
+		//}
 
 		// Load sheets in in-memory
 		rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
